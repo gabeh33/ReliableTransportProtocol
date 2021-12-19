@@ -29,7 +29,7 @@ $ netsim
 $ nettest [--live] [--size {small,medium,large,huge}] [--timeout TIMEOUT]
 ```
 * Where --live instructs the script to echo STDERR to the console, --size denotes the amount of data to send, and --timeout is the max number 
-* of seconds to run the program.
+of seconds to run the program.
 * Alternatively to run a whole suite of tests, use the command
 ```
 testall
