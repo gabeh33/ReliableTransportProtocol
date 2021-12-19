@@ -1,0 +1,116 @@
+#!/usr/bin/python3
+#
+# CS3700, Fall 2021
+# Gabe Holmes
+# Project 4 Reliable Transport Protocol
+#
+
+import datetime
+import json
+import sys
+import socket
+import time
+import select
+
+from base64 import b64encode
+
+
+MSG_SIZE = 1500
+DATA_SIZE = 1000
+TIMEOUT = 30
+SEQUENCE = 0
+
+# Bind to localhost and an ephemeral port
+IP_PORT = sys.argv[1]
+UDP_IP = IP_PORT[0:IP_PORT.find(":")]
+UDP_PORT = int(IP_PORT[IP_PORT.find(":")+1:])
+dest = (UDP_IP, UDP_PORT)
+
+time.sleep(.5)
+
+# Set up the socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(TIMEOUT)
+
+# Store a copy of the data in case this packet gets dropped
+DATACOPY = ""
+acks_sent = [] #List of acks that have been sent. After acks are received, remove them from this array
+send_eof_packet = False
+
+def log(string):
+  sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + " 3700send: " + string + "\n")
+
+def send_next_packet():
+  global SEQUENCE
+  global DATACOPY
+
+  data = sys.stdin.buffer.read(DATA_SIZE)
+  if (len(data) > 0):
+    msg = json.dumps({"sequence": SEQUENCE, "data": b64encode(data).decode(), "ack": False, "eof": False})
+    DATACOPY = msg
+    if sock.sendto(msg.encode(), dest) < len(msg):
+      log("[error] unable to fully send packet")
+    else:
+      log("[send data] " + str(SEQUENCE) + " (" + str(len(data)) + ")")
+    SEQUENCE += len(data)
+    log("------" + str(SEQUENCE) + "-----")
+
+    acks_sent.append(SEQUENCE)
+    return True
+  else:
+    return False
+
+# Send first packet
+send_next_packet() #store a copy of the data
+
+# Now read in data, send packets
+i = 1
+while True:
+  log("ABOUT TO SLEEP")
+  sock.setblocking(0)
+  timeout = 0.35 #Amount of seconds to wait for a response
+  result = False
+  ready = select.select([sock], [], [], timeout)
+  if ready[0]:
+    result = sock.recvfrom(MSG_SIZE)
+    ready = -1
+
+  if result:
+    (data, addr) = result
+    try:
+      decoded = json.loads(data.decode())
+      log("[recv pkt] " + str(decoded))
+      log("[recv ack] " + str(decoded['ack']))
+      log("CHECKING DECODED[eofAck]")
+      if decoded['eofAck']:
+        #exit the program because we received an eof ack
+        log("got the eof ack packet, exiting")
+        sys.exit(0)
+      # If there is an ack, send next packet
+      if decoded['ack'] == SEQUENCE and not send_eof_packet:
+        log("=======" + str(SEQUENCE) + "=======")
+        acks_sent.remove(SEQUENCE)
+        # Try to send next packet, if it fails we need to send an eof packet
+        if (not send_next_packet()):
+          send_eof_packet = True
+
+
+    except (ValueError, KeyError, TypeError):
+      log("[recv corrupt packet]")
+  elif not send_eof_packet:
+    #packet was dropped, send it again as it was not an eof packet
+    log("[error] timeout, sending packet again!")
+    SEQUENCE -= len(DATACOPY)  # Offset adjusting the sequence number, since the sequence number was increased
+                               # even though the packet was dropped
+    if sock.sendto(DATACOPY.encode(), dest) < len(DATACOPY):
+      log("[error] unable to fully send packet")
+    else:
+      log("[send data] " + str(SEQUENCE) + " (" + str(len(DATACOPY)) + ")")
+    SEQUENCE += len(DATACOPY)  # Adjust sequence number to reflect the correct number,
+                               # assuming this packet gets delivered
+  if send_eof_packet: #already sent an eof packet, so keep sending it until we get an ack back
+    log("SENDING EOF PACKET, count = " + str(i))
+    sock.sendto(json.dumps({"eof": True, "data": "", "sequence": SEQUENCE, "ack": False}).encode(), dest)
+    i -=- 1
+#dont think i need this but leaving it here
+sys.exit(0)
